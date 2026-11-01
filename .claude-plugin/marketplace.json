@@ -1,5 +1,6 @@
 {
   "name": "treybae",
   "owner": { "name": "treybae" },
+  "description": "Claude Code plugins from treybae: secret-guard keeps Claude away from shell config, credential files and environment dumps.",
   "plugins": [{ "name": "secret-guard", "source": "./" }]
 }
