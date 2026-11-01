@@ -1,7 +1,7 @@
 {
   "name": "secret-guard",
-  "version": "0.1.0",
-  "description": "Stops Claude from reading shell config, credential files or the environment, and tells it why",
+  "version": "0.2.0",
+  "description": "Stops Claude from reading credential files, dumping the environment or printing secrets, and redacts secrets from tool output",
   "license": "MIT",
   "author": {
     "name": "treybae"
