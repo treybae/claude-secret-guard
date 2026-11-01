@@ -4,7 +4,7 @@
 
 # secret-guard
 
-An SRE's shell holds the keys to production: Vault tokens, AWS profiles, kubeconfigs, API keys in dotfiles. Claude Code's auto mode makes agents fast because they act without asking, but that also means one stray `cat ~/.zshrc` or `vault kv get` can put a live credential into an AI transcript. Turning auto mode off is safe but slow. secret-guard gives you both: it blocks commands and file reads that expose credentials, redacts secrets from anything a tool returns before Claude sees it, and logs what it did in `/secret-guard`. Install it once, keep auto mode on.
+Your shell holds the keys to production: cloud credentials, GitHub and Vault tokens, kubeconfigs, API keys in dotfiles. Claude Code's auto mode makes agents fast because they act without asking, but that also means one stray `cat ~/.zshrc` or `vault kv get` can put a live credential into an AI transcript. Turning auto mode off is safe but slow. secret-guard gives you both: it blocks commands and file reads that expose credentials, redacts secrets from anything a tool returns before Claude sees it, and logs what it did in `/secret-guard`. Install it once, keep auto mode on.
 
 It does four things, in every permission mode, including auto and inside subagents:
 
