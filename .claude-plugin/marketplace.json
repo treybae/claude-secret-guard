@@ -1,0 +1,5 @@
+{
+  "name": "treybae",
+  "owner": { "name": "treybae" },
+  "plugins": [{ "name": "secret-guard", "source": "./" }]
+}
