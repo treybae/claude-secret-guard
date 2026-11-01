@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- New plugin description: "Your shell holds the keys to production. secret-guard stops Claude Code from reading, printing or leaking them."
+
 ## 0.4.1
 
 - Shorter status line: `redacted 8 secrets · /secret-guard for details`, `blocked a command · …`, `blocked an unsafe heredoc · …`. The kinds, sources and reasons are in `/secret-guard`. The text no longer repeats the plugin's name, which Claude Code already shows.

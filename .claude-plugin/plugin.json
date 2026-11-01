@@ -1,7 +1,7 @@
 {
   "name": "secret-guard",
-  "version": "0.4.1",
-  "description": "Stops Claude from reading credential files, dumping the environment, printing secrets or writing files through heredocs, and redacts secrets from tool output",
+  "version": "0.4.2",
+  "description": "Your shell holds the keys to production. secret-guard stops Claude Code from reading, printing or leaking them: it blocks risky commands and file reads, and redacts secrets from tool output before Claude sees them.",
   "license": "MIT",
   "author": {
     "name": "treybae"
