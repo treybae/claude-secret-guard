@@ -73,7 +73,7 @@ Pair it with a written rule in your `~/.claude/CLAUDE.md`, so Claude avoids secr
 ## Install
 
 > [!NOTE]
-> secret-guard hasn't been submitted to the official Claude plugin directory yet, so it won't show up when you browse plugins. Install it from this repository's own marketplace, as below. The whole project is a work in progress and isn't considered generally available (GA) until 1.0.0. Expect its rules and behaviour to change between versions.
+> secret-guard hasn't been submitted to the official Claude plugin directory yet, so it won't show up when you browse plugins. Install it from this repository's own marketplace, as below. The whole project is a work in progress and isn't considered generally available (GA) until 1.0.0. Expect its rules and behavior to change between versions.
 
 In a Claude Code terminal session:
 

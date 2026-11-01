@@ -187,7 +187,7 @@ test('a blocked heredoc gets its own message, without the secrets advice', async
   expect(bashVerdict("cat > notes.md <<'EOF'\nhello\nEOF")).toMatchObject({ kind: 'deny', about: 'heredoc' })
 })
 
-test('file tool paths to secret files are recognised, others are not', () => {
+test('file tool paths to secret files are recognized, others are not', () => {
   for (const p of [
     '/Users/me/.zshrc', '/home/me/.bash_profile', '~/.netrc', '/Users/me/.aws/credentials', '/Users/me/.ssh', '/Users/me/.ssh/',
     '/Users/me/.kube/config', '/Users/me/.kube/cache/x', '/Users/me/.config/op/config', '/Users/me/./.zshrc', '/Users/me/.vault-token',
