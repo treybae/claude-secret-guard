@@ -25,7 +25,7 @@ It does four things, in every permission mode, including auto and inside subagen
     - key headers: `DD-API-KEY`, `DD-APPLICATION-KEY`, `X-API-Key`, `Authorization`
     - the values under `data:` and `stringData:` in Kubernetes Secret YAML, including multi-line `|` values
 
-    This catches what slips past the blocks. Placeholders (`$TOKEN`, `<value>`, `op://...`) and SOPS-encrypted values (`ENC[...]`) are left alone. When something is redacted or blocked, the status line says what kind, never the value, for example `secret-guard redacted 3 secrets from Bash output: DD_API_KEY value ×2, Vault token · /secret-guard for details`. It clears when you send your next prompt.
+    This catches what slips past the blocks. Placeholders (`$TOKEN`, `<value>`, `op://...`) and SOPS-encrypted values (`ENC[...]`) are left alone. When something is redacted or blocked, the status line says so briefly, for example `secret-guard: redacted 3 secrets · /secret-guard for details`, and clears when you send your next prompt. `/secret-guard` has the details.
 
 **`/secret-guard`** shows this session's log, newest first: each redaction with the tool and command or file it came from, the kinds found, and the affected lines with the values already replaced; and each block or approval prompt with the command and the reason. `/secret-guard clear` empties it. The log holds no secret values, and it starts empty in each session.
 

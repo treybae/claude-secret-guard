@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Shorter status line: `redacted 8 secrets · /secret-guard for details`, `blocked a command · …`, `blocked an unsafe heredoc · …`. The kinds, sources and reasons are in `/secret-guard`. The text no longer repeats the plugin's name, which Claude Code already shows.
+
 ## 0.4.0
 
 - Blocks heredocs that write a file (`cat > file <<EOF`, `tee file <<EOF`) and points Claude to the Write tool, which can't run any of the text it writes.

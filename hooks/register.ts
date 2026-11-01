@@ -1,6 +1,6 @@
 import type { Hook, Register } from 'claude-code'
 import { createLog, formatLog, redactedLines, whereOf, type Event } from './log'
-import { describeKinds, redactValue } from './redact'
+import { redactValue } from './redact'
 import { bashVerdict, isSecretPath } from './rules'
 
 // Input fields that name a file or folder, across the file tools (Read, Grep, Glob, Edit, Write, ...).
@@ -67,8 +67,9 @@ export const register: Register = on => {
     const { value, count, kinds } = redactValue(out.result)
     if (count === 0) return out
     await record($, { action: 'redacted', tool: e.tool, where: whereOf(e.tool, input), kinds, lines: redactedLines(value) })
-    // Stays up until the user's next prompt (cleared below). Names the kinds, never the values.
-    $.ui.status(`secret-guard redacted ${count} secret${count === 1 ? '' : 's'} from ${e.tool} output: ${describeKinds(kinds)} · /${COMMAND} for details`)
+    // Kept short; /secret-guard has the kinds, source and lines. Claude Code prefixes the plugin's
+    // name, so the text doesn't repeat it. Stays up until the user's next prompt (cleared below).
+    $.ui.status(`redacted ${count} secret${count === 1 ? '' : 's'} · /${COMMAND} for details`)
     return { result: value as typeof out.result, context: out.context }
   }).catch(($, e, next) =>
     next.called
@@ -83,10 +84,10 @@ export const register: Register = on => {
     if (verdict.kind === 'deny') {
       await record($, { action: 'blocked', tool: 'Bash', where, why: verdict.reason })
       if (verdict.about === 'heredoc') {
-        $.ui.status(`secret-guard blocked an unsafe heredoc · /${COMMAND} for details`)
+        $.ui.status(`blocked an unsafe heredoc · /${COMMAND} for details`)
         return { deny: `${$.plugin.name}: blocked, ${verdict.reason}.` }
       }
-      $.ui.status(`secret-guard blocked a command: ${verdict.reason} · /${COMMAND} for details`)
+      $.ui.status(`blocked a command · /${COMMAND} for details`)
       return { deny: `${$.plugin.name}: blocked, ${verdict.reason}. ${ELSEWHERE}` }
     }
 

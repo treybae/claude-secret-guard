@@ -388,7 +388,7 @@ test('the status line names what was redacted, and the next prompt clears it', a
   on('prompt.submit', (_, e) => ({ text: e.text }) as never)
 
   await $.tool.call({ tool: 'Bash', command: 'make debug' })
-  expect(statuses.at(-1)).toBe('secret-guard redacted 2 secrets from Bash output: GitHub token, Vault token · /secret-guard for details')
+  expect(statuses.at(-1)).toBe('redacted 2 secrets · /secret-guard for details')
   expect(String(statuses.at(-1))).not.toContain(FAKE.vault)
 
   await $.prompt.submit({ text: 'next question' } as never)
