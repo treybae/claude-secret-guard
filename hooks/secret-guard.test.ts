@@ -1,4 +1,5 @@
 import { expect, test, type TestBody } from 'claude-code/testing'
+import { whereOf } from './log'
 import { MARK, describeKinds, redactText, redactValue } from './redact'
 import { bashReason, bashVerdict, isSecretPath } from './rules'
 
@@ -328,11 +329,50 @@ test('the status line names what was redacted, and the next prompt clears it', a
   on('prompt.submit', (_, e) => ({ text: e.text }) as never)
 
   await $.tool.call({ tool: 'Bash', command: 'make debug' })
-  expect(statuses.at(-1)).toBe('secret-guard redacted 2 secrets from Bash output: GitHub token, Vault token')
+  expect(statuses.at(-1)).toBe('secret-guard redacted 2 secrets from Bash output: GitHub token, Vault token · /secret-guard for details')
   expect(String(statuses.at(-1))).not.toContain(FAKE.vault)
 
   await $.prompt.submit({ text: 'next question' } as never)
   expect(statuses.at(-1)).toBeUndefined()
+})
+
+test('/secret-guard shows what was redacted or blocked, where and why, without values', async ($, on) => {
+  on('command.register', () => ({ value: { command: 'secret-guard' } }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', (_, e) => {
+    const cmd = (e as unknown as { command?: string }).command
+    return { result: { stdout: cmd === 'make debug' ? `starting\nVAULT_TOKEN=${FAKE.vault}\ndone` : 'ok', stderr: '' } }
+  })
+  on('command.run', () => ({ text: 'engine' }) as never)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'make debug' })
+  await $.tool.call({ tool: 'Bash', command: 'tail ~/.zshrc' })
+  await $.tool.call({ tool: 'Read', file_path: '/Users/me/.vault-token' })
+
+  const report = String((await $.command.run({ command: 'secret-guard', args: '' } as never) as { text?: string }).text)
+  expect(report).toContain('3 events this session')
+  expect(report).toContain('redacted 1 secret from Bash output')
+  expect(report).toContain('where: Bash `make debug`')
+  expect(report).toContain('what:  Vault token')
+  expect(report).toContain(`lines: VAULT_TOKEN=${MARK}`)
+  expect(report).toContain('blocked: Bash `tail ~/.zshrc`')
+  expect(report).toContain('why:   this command references a shell config or credential file')
+  expect(report).toContain('blocked: Read `/Users/me/.vault-token`')
+  expect(report).not.toContain(FAKE.vault)
+  expect(report.indexOf('Read `/Users/me/.vault-token`')).toBeLessThan(report.indexOf('make debug'))
+
+  const cleared = String((await $.command.run({ command: 'secret-guard', args: 'clear' } as never) as { text?: string }).text)
+  expect(cleared).toBe('Log cleared.')
+  const empty = String((await $.command.run({ command: 'secret-guard', args: '' } as never) as { text?: string }).text)
+  expect(empty).toBe('Nothing redacted or blocked this session.')
+})
+
+test('a command line that itself holds a secret is redacted in the log', () => {
+  expect(whereOf('Bash', { command: `curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwx" https://api.example.com` })).toBe(
+    `Bash \`curl -H "Authorization: Bearer ${MARK}" https://api.example.com\``,
+  )
 })
 
 test('a result with no secrets passes through unchanged', async ($, on) => {

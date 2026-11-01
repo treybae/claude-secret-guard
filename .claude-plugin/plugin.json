@@ -1,6 +1,6 @@
 {
   "name": "secret-guard",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Stops Claude from reading credential files, dumping the environment or printing secrets, and redacts secrets from tool output",
   "license": "MIT",
   "author": {
