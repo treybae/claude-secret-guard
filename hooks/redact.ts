@@ -2,28 +2,40 @@
 
 export const MARK = '[REDACTED by secret-guard]'
 
+/** How many secrets of each kind were redacted, by a label safe to show (never the value). */
+export type Kinds = Record<string, number>
+
 // Whole-match patterns: the match itself is the secret.
-const WHOLE: readonly RegExp[] = [
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
-  /\bhv[sbr]\.[A-Za-z0-9_-]{20,}/g, // Vault service, batch and recovery tokens
-  /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, // GitHub tokens
-  /\bgithub_pat_[A-Za-z0-9_]{22,}\b/g,
-  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, // AWS access key ids
-  /\bxox[abeoprs]-[A-Za-z0-9-]{10,}/g, // Slack tokens
-  /\bops_eyJ[A-Za-z0-9_-]{20,}/g, // 1Password service account tokens
-  /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic API keys
-  /\bsk_live_[A-Za-z0-9]{20,}\b/g, // Stripe live keys
-  /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google API keys
-  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // JWTs
+const WHOLE: readonly [RegExp, string][] = [
+  [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, 'private key'],
+  [/\bhv[sbr]\.[A-Za-z0-9_-]{20,}/g, 'Vault token'],
+  [/\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, 'GitHub token'],
+  [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, 'GitHub token'],
+  [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, 'AWS access key ID'],
+  [/\bxox[abeoprs]-[A-Za-z0-9-]{10,}/g, 'Slack token'],
+  [/\bops_eyJ[A-Za-z0-9_-]{20,}/g, '1Password service account token'],
+  [/\bsk-ant-[A-Za-z0-9_-]{20,}/g, 'Anthropic API key'],
+  [/\bsk_live_[A-Za-z0-9]{20,}\b/g, 'Stripe live key'],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/g, 'Google API key'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, 'JWT'],
 ]
 
 // Assignments: keep the name, replace the value. Values that look like placeholders
-// (`$VAR`, `${VAR}`, `<value>`, `op://...`, `***`) are left alone.
+// (`$VAR`, `${VAR}`, `<value>`, `op://...`, `***`, SOPS `ENC[...]`) are left alone.
 const ASSIGNMENT =
   /\b((?:aws_secret_access_key|aws_session_token|secretaccesskey|[A-Za-z0-9_]*(?:password|passwd|secret|token|api_key|apikey|app_key|appkey|application_key|private_key))["']?\s*[:=]\s*["']?)(?!\$|<|op:\/\/|\*{3}|\[REDACTED|ENC\[)([^\s"'`,;]{12,})/gi
 
 // HTTP headers that carry keys, such as Datadog's `DD-API-KEY: <32 hex>` and `DD-APPLICATION-KEY: <40 hex>`.
 const KEY_HEADER = /\b((?:dd-api-key|dd-application-key|x-api-key|x-auth-token|authorization)\s*:\s*(?:Bearer\s+|Basic\s+|token\s+)?)(?!\$|<|\[REDACTED)([A-Za-z0-9._~+/=-]{16,})/gi
+
+function add(kinds: Kinds, label: string, n = 1): void {
+  kinds[label] = (kinds[label] ?? 0) + n
+}
+
+// The name an assignment or header shows the model, e.g. `DD_API_KEY value` or `DD-API-KEY header`.
+function nameOf(prefix: string): string {
+  return prefix.replace(/["'\s]*[:=].*$/s, '').replace(/^["']/, '')
+}
 
 // The values under `data:` and `stringData:` in a Kubernetes Secret manifest (YAML), one document at a time.
 // SOPS-encrypted documents are left alone: their values are already ciphertext.
@@ -70,50 +82,56 @@ function redactSecretManifests(text: string): { text: string; count: number } {
   return { text: docs.join(''), count }
 }
 
-/** The text with secrets replaced, and how many were. */
-export function redactText(text: string): { text: string; count: number } {
-  let count = 0
+/** The text with secrets replaced, how many were, and of which kinds. */
+export function redactText(text: string): { text: string; count: number; kinds: Kinds } {
+  const kinds: Kinds = {}
   let out = text
-  for (const re of WHOLE) {
+  for (const [re, label] of WHOLE) {
     out = out.replace(re, () => {
-      count++
+      add(kinds, label)
       return MARK
     })
   }
-  for (const re of [ASSIGNMENT, KEY_HEADER]) {
-    out = out.replace(re, (_m, name: string) => {
-      count++
-      return `${name}${MARK}`
-    })
-  }
+  out = out.replace(ASSIGNMENT, (_m, prefix: string) => {
+    add(kinds, `${nameOf(prefix)} value`)
+    return `${prefix}${MARK}`
+  })
+  out = out.replace(KEY_HEADER, (_m, prefix: string) => {
+    add(kinds, `${nameOf(prefix)} header`)
+    return `${prefix}${MARK}`
+  })
   const manifests = redactSecretManifests(out)
-  return { text: manifests.text, count: count + manifests.count }
+  if (manifests.count) add(kinds, 'Kubernetes Secret value', manifests.count)
+  const count = Object.values(kinds).reduce((a, b) => a + b, 0)
+  return { text: manifests.text, count, kinds }
 }
 
-/** A copy of any JSON-like value with every string redacted, and the total count. */
-export function redactValue(value: unknown): { value: unknown; count: number } {
+/** A copy of any JSON-like value with every string redacted, the total count, and the kinds. */
+export function redactValue(value: unknown): { value: unknown; count: number; kinds: Kinds } {
   if (typeof value === 'string') {
     const r = redactText(value)
-    return { value: r.text, count: r.count }
+    return { value: r.text, count: r.count, kinds: r.kinds }
   }
-  if (Array.isArray(value)) {
-    let count = 0
-    const out = value.map(v => {
-      const r = redactValue(v)
-      count += r.count
-      return r.value
-    })
-    return { value: out, count }
+  const kinds: Kinds = {}
+  let count = 0
+  const merge = (r: { value: unknown; count: number; kinds: Kinds }) => {
+    count += r.count
+    for (const [k, n] of Object.entries(r.kinds)) add(kinds, k, n)
+    return r.value
   }
+  if (Array.isArray(value)) return { value: value.map(v => merge(redactValue(v))), count, kinds }
   if (value !== null && typeof value === 'object') {
-    let count = 0
     const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value)) {
-      const r = redactValue(v)
-      count += r.count
-      out[k] = r.value
-    }
-    return { value: out, count }
+    for (const [k, v] of Object.entries(value)) out[k] = merge(redactValue(v))
+    return { value: out, count, kinds }
   }
-  return { value, count: 0 }
+  return { value, count: 0, kinds }
+}
+
+/** A short status line naming what was redacted, e.g. "Vault token, DD_API_KEY value ×2". */
+export function describeKinds(kinds: Kinds, max = 4): string {
+  const parts = Object.entries(kinds)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([k, n]) => (n > 1 ? `${k} ×${n}` : k))
+  return parts.length > max ? `${parts.slice(0, max).join(', ')} and ${parts.length - max} more` : parts.join(', ')
 }

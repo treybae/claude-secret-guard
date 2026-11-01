@@ -25,7 +25,7 @@ It does four things, in every permission mode, including auto and inside subagen
     - key headers: `DD-API-KEY`, `DD-APPLICATION-KEY`, `X-API-Key`, `Authorization`
     - the values under `data:` and `stringData:` in Kubernetes Secret YAML, including multi-line `|` values
 
-    This catches what slips past the blocks. Placeholders (`$TOKEN`, `<value>`, `op://...`) and SOPS-encrypted values (`ENC[...]`) are left alone.
+    This catches what slips past the blocks. Placeholders (`$TOKEN`, `<value>`, `op://...`) and SOPS-encrypted values (`ENC[...]`) are left alone. When something is redacted, the status line says what kind, never the value, for example `secret-guard redacted 3 secrets from Bash output: DD_API_KEY value ×2, Vault token`. It clears when you send your next prompt.
 
 **Asks before a few borderline commands.** These are often legitimate, so instead of refusing them, secret-guard asks you to **Allow once** or **Block**:
 

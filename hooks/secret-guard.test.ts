@@ -1,5 +1,5 @@
 import { expect, test, type TestBody } from 'claude-code/testing'
-import { MARK, redactText, redactValue } from './redact'
+import { MARK, describeKinds, redactText, redactValue } from './redact'
 import { bashReason, bashVerdict, isSecretPath } from './rules'
 
 const BLOCKED_COMMANDS = [
@@ -231,7 +231,17 @@ test('ordinary output is left exactly as it was', () => {
   const plain =
     'NAME   READY   STATUS\napp-1  1/1     Running\ncommit 83539a2 Add plugin\nhttps://github.com/treybae/x\n' +
     'kind: Secret\nsecretName: app-secrets\nsecretKey: APP_COOKIE_KEY\nsecretRef:\n  name: app-credentials\nmax_tokens: 4096\nrefresh_token_ttl: 3600'
-  expect(redactText(plain)).toEqual({ text: plain, count: 0 })
+  expect(redactText(plain)).toEqual({ text: plain, count: 0, kinds: {} })
+})
+
+test('redaction reports the kinds it removed, by name and never by value', () => {
+  const ddApi = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'
+  const r = redactText(`token ${FAKE.vault}\nDD_API_KEY=${ddApi}\nDD_API_KEY=${ddApi}\nDD-APPLICATION-KEY: ${ddApi}0a1b2c3d\n${FAKE.github}`)
+  expect(r.kinds).toEqual({ 'Vault token': 1, 'GitHub token': 1, 'DD_API_KEY value': 2, 'DD-APPLICATION-KEY header': 1 })
+  const line = describeKinds(r.kinds)
+  expect(line).toBe('DD_API_KEY value ×2, DD-APPLICATION-KEY header, GitHub token, Vault token')
+  expect(line).not.toContain(ddApi)
+  expect(describeKinds({ a: 1, b: 1, c: 1, d: 1, e: 1, f: 1 })).toBe('a, b, c, d and 2 more')
 })
 
 test('redaction walks nested results', () => {
@@ -306,6 +316,23 @@ test('a secret in a tool result is redacted before it comes back', async ($, on)
   expect(stdout).not.toContain(FAKE.vault)
   expect(stdout).toContain(MARK)
   expect(stdout).toContain('ok')
+})
+
+test('the status line names what was redacted, and the next prompt clears it', async ($, on) => {
+  const statuses: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: { stdout: `a ${FAKE.vault}\nb ${FAKE.github}`, stderr: '' } }))
+  on('prompt.submit', (_, e) => ({ text: e.text }) as never)
+
+  await $.tool.call({ tool: 'Bash', command: 'make debug' })
+  expect(statuses.at(-1)).toBe('secret-guard redacted 2 secrets from Bash output: GitHub token, Vault token')
+  expect(String(statuses.at(-1))).not.toContain(FAKE.vault)
+
+  await $.prompt.submit({ text: 'next question' } as never)
+  expect(statuses.at(-1)).toBeUndefined()
 })
 
 test('a result with no secrets passes through unchanged', async ($, on) => {

@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { redactValue } from './redact'
+import { describeKinds, redactValue } from './redact'
 import { bashVerdict, isSecretPath } from './rules'
 
 // Input fields that name a file or folder, across the file tools (Read, Grep, Glob, Edit, Write, ...).
@@ -21,9 +21,10 @@ export const register: Register = on => {
 
     const out = await next(e)
     if (out.deny !== undefined) return out
-    const { value, count } = redactValue(out.result)
+    const { value, count, kinds } = redactValue(out.result)
     if (count === 0) return out
-    $.ui.status(`secret-guard redacted ${count} secret${count === 1 ? '' : 's'} from ${e.tool} output`)
+    // Stays up until the user's next prompt (cleared below). Names the kinds, never the values.
+    $.ui.status(`secret-guard redacted ${count} secret${count === 1 ? '' : 's'} from ${e.tool} output: ${describeKinds(kinds)}`)
     return { result: value as typeof out.result, context: out.context }
   }).catch(($, e, next) =>
     next.called
@@ -49,4 +50,10 @@ export const register: Register = on => {
     }
     return answer === ALLOW ? next(e) : { deny: `${$.plugin.name}: the user did not allow this command (it ${verdict.reason}). ${ELSEWHERE}` }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed, so the command was blocked.` }))
+
+  // The redaction note is about the last turn: the user's next prompt clears it.
+  on('prompt.submit', ($, e, next) => {
+    $.ui.status(undefined)
+    return next(e)
+  })
 }
