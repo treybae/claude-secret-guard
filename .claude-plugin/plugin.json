@@ -2,5 +2,8 @@
   "name": "secret-guard",
   "version": "0.1.0",
   "description": "Stops Claude from reading shell config, credential files or the environment, and tells it why",
-  "license": "MIT"
+  "license": "MIT",
+  "author": {
+    "name": "treybae"
+  }
 }
