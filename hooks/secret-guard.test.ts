@@ -1,7 +1,7 @@
 import { expect, test, type TestBody } from 'claude-code/testing'
 import { whereOf } from './log'
 import { MARK, describeKinds, redactText, redactValue } from './redact'
-import { bashReason, bashVerdict, isSecretPath } from './rules'
+import { bashReason, bashVerdict, heredocReason, isSecretPath } from './rules'
 
 const BLOCKED_COMMANDS = [
   // shell config and credential files
@@ -126,6 +126,65 @@ test('borderline commands ask, and anything else in them still blocks', () => {
     expect(bashVerdict(c).kind, c).toBe('deny')
   }
   expect(bashVerdict('kubectl get pods').kind).toBe('allow')
+})
+
+test('a heredoc that ends early is blocked, the shape of the original incident', () => {
+  const incident = [
+    "cat > runbook.md <<'EOF'",
+    '# Install lnl',
+    'Save this script:',
+    'cat > ~/bin/lnl <<EOF',
+    'aws-vault clear',
+    'EOF',
+    'chmod +x ~/bin/lnl',
+    'EOF',
+  ].join('\n')
+  expect(heredocReason(incident)).toBeDefined()
+
+  // Even a heredoc that only feeds a command is blocked when its own text holds its marker.
+  const yaml = ['kubectl apply -f - <<EOF', 'kind: ConfigMap', 'data:', '  note: |', 'EOF', '    more', 'EOF'].join('\n')
+  expect(heredocReason(yaml)).toContain('ends early')
+})
+
+test('a heredoc that writes a file is blocked, pointing to the Write tool', () => {
+  for (const c of [
+    "cat > notes.md <<'EOF'\nhello\nEOF",
+    'cat >> log.txt <<EOF\nline\nEOF',
+    'cat <<EOF > config.yaml\nkey: value\nEOF',
+    'tee out.txt <<EOF\ntext\nEOF',
+    'tee -a out.txt <<"END"\ntext\nEND',
+    'mkdir -p docs && cat > docs/a.md <<-EOF\n\tindented\n\tEOF',
+  ]) {
+    expect(heredocReason(c), c).toContain('Write tool')
+  }
+})
+
+test('heredocs that feed a command and end correctly are allowed', () => {
+  for (const c of [
+    'kubectl apply -f - <<EOF\napiVersion: v1\nkind: ConfigMap\nEOF',
+    "psql <<'SQL'\nselect 1;\nSQL",
+    'python3 - <<PY\nprint("hi")\nPY',
+    `git commit -m "$(cat <<'EOF'\nfix: a thing\nEOF\n)"`,
+    'cat <<EOF\njust printing\nEOF',
+    'cat >&2 <<EOF\nwarning\nEOF',
+    'cat <<EOF > /dev/null\nnothing\nEOF',
+    'cat <<A; cat <<B\none\nA\ntwo\nB',
+    'cat <<-EOF\n\tindented\n\tEOF\necho done',
+    'grep -c x <<< "herestring"',
+    'echo $((1<<3))',
+    'cat <<EOF\nunterminated is the shell\'s problem, not an early end',
+  ]) {
+    expect(heredocReason(c), c).toBeUndefined()
+  }
+})
+
+test('a blocked heredoc gets its own message, without the secrets advice', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  const out = await $.tool.call({ tool: 'Bash', command: "cat > notes.md <<'EOF'\nhello\nEOF" })
+  const message = String((out as { deny?: string }).deny ?? out.text)
+  expect(message).toContain('Write tool')
+  expect(message).not.toContain('separate terminal')
+  expect(bashVerdict("cat > notes.md <<'EOF'\nhello\nEOF")).toMatchObject({ kind: 'deny', about: 'heredoc' })
 })
 
 test('file tool paths to secret files are recognised, others are not', () => {

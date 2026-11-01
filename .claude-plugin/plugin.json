@@ -1,7 +1,7 @@
 {
   "name": "secret-guard",
-  "version": "0.3.0",
-  "description": "Stops Claude from reading credential files, dumping the environment or printing secrets, and redacts secrets from tool output",
+  "version": "0.4.0",
+  "description": "Stops Claude from reading credential files, dumping the environment, printing secrets or writing files through heredocs, and redacts secrets from tool output",
   "license": "MIT",
   "author": {
     "name": "treybae"

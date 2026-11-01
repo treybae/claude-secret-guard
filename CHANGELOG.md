@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Blocks heredocs that write a file (`cat > file <<EOF`, `tee file <<EOF`) and points Claude to the Write tool, which can't run any of the text it writes.
+- Blocks any heredoc whose marker also appears inside its own text, so it would end early and run the rest as shell commands. This was the root cause of the leak that started this plugin.
+- Heredocs that feed a command and end correctly (`kubectl apply -f - <<EOF`, `git commit -m "$(cat <<'EOF' … EOF)"`) still work.
+
 ## 0.3.0
 
 - `/secret-guard` shows this session's log, newest first: each redaction with the tool, command or file, the kinds of secret found and the affected lines with values replaced; each block or approval prompt with its reason. `/secret-guard clear` empties it.

@@ -38,6 +38,13 @@ It does four things, in every permission mode, including auto and inside subagen
     why:   this command references a shell config or credential file (~/.zshrc, ~/.aws, ~/.ssh, ~/.vault-token, ...)
 ```
 
+**Blocks unsafe heredocs.** A shell heredoc ends at the first line matching its marker, so text that contains its own marker ends it early and the rest runs as shell commands. secret-guard blocks:
+
+- heredocs that write a file (`cat > file <<EOF`, `cat >> file <<EOF`, `tee file <<EOF`). Claude uses the Write tool instead, which writes text exactly as given.
+- any heredoc whose marker also appears inside its own text, even one that only feeds a command.
+
+Heredocs that feed a command and end correctly still work: `kubectl apply -f - <<EOF`, `psql <<SQL`, `python - <<PY`, and commit messages written with `git commit -m "$(cat <<'EOF' … EOF)"`.
+
 **Asks before a few borderline commands.** These are often legitimate, so instead of refusing them, secret-guard asks you to **Allow once** or **Block**:
 
 - passing your kubeconfig to a tool: `kubectl --kubeconfig ~/.kube/config …`, `KUBECONFIG=~/.kube/… helm …`

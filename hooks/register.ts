@@ -82,6 +82,10 @@ export const register: Register = on => {
     const where = whereOf('Bash', e as unknown as Record<string, unknown>)
     if (verdict.kind === 'deny') {
       await record($, { action: 'blocked', tool: 'Bash', where, why: verdict.reason })
+      if (verdict.about === 'heredoc') {
+        $.ui.status(`secret-guard blocked an unsafe heredoc · /${COMMAND} for details`)
+        return { deny: `${$.plugin.name}: blocked, ${verdict.reason}.` }
+      }
       $.ui.status(`secret-guard blocked a command: ${verdict.reason} · /${COMMAND} for details`)
       return { deny: `${$.plugin.name}: blocked, ${verdict.reason}. ${ELSEWHERE}` }
     }

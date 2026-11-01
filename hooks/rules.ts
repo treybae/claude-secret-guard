@@ -48,6 +48,46 @@ const SECRET_COMMANDS: readonly [RegExp, string][] = [
   [/\bgit\s+credential\s+fill\b/, '`git credential fill` prints a stored credential'],
 ]
 
+// A heredoc opener: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<< "EOF"`. A herestring (`<<<`) is not one.
+const HEREDOC_OPEN = /(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g
+// On a heredoc's opening line: `cat` redirected into a file, or `tee` naming one. Redirects to
+// another stream (`>&2`) or to /dev/null, /dev/stdout and /dev/stderr don't write a file.
+const CAT_TO_FILE = /\bcat\b[^|;&]*?(?<![0-9&])>{1,2}\s*(?!&|\/dev\/(?:null|stdout|stderr)\b)["']?[^\s"'&|;<>]/
+const TEE_TO_FILE = /\btee\b(?:\s+-[a-z]+)*\s+(?!\/dev\/(?:null|stdout|stderr)\b)["']?[^\s"'&|;<>-]/
+
+/**
+ * Why a command's heredocs are unsafe, or undefined when they're fine:
+ * a heredoc that writes a file (use the Write tool), or one whose marker also appears inside
+ * its own text, so it ends early and the rest of the text runs as shell commands.
+ */
+export function heredocReason(command: string): string | undefined {
+  const lines = command.split('\n')
+  const pending: { marker: string; tabs: boolean }[] = []
+  const closed = new Set<string>()
+  for (const line of lines) {
+    const open = pending[0]
+    if (open) {
+      if ((open.tabs ? line.replace(/^\t+/, '') : line) === open.marker) {
+        closed.add(open.marker)
+        pending.shift()
+      }
+      continue
+    }
+    // A command line on its own that is just a used-up marker: an earlier heredoc ended early,
+    // and this line (and everything before it since then) would run as commands.
+    if (closed.has(line.trim()) && /^\s*[A-Za-z_][A-Za-z0-9_]*\s*$/.test(line)) {
+      return `this heredoc ends early: its marker \`${line.trim()}\` also appears inside its own text, so the rest of that text would run as shell commands. Use a marker that doesn't appear in the text, or write files with the Write tool`
+    }
+    HEREDOC_OPEN.lastIndex = 0
+    const opened = [...line.matchAll(HEREDOC_OPEN)]
+    if (opened.length && (CAT_TO_FILE.test(line) || TEE_TO_FILE.test(line))) {
+      return 'this command writes a file through a heredoc. Use the Write tool instead: it writes the text exactly as given, while a heredoc can end early and run its text as shell commands'
+    }
+    for (const m of opened) pending.push({ marker: m[3]!, tabs: m[1] === '-' })
+  }
+  return undefined
+}
+
 /** Why a shell command must not run, or undefined when it may. */
 export function bashReason(command: string): string | undefined {
   if (HOME_PATH.test(command) || BARE_NAME.test(command)) {
@@ -69,10 +109,15 @@ const ASK_RULES: readonly [RegExp, string][] = [
   [ASSUME_ROLE, 'prints temporary AWS credentials; secret-guard redacts them from the output'],
 ]
 
-export type Verdict = { kind: 'allow' } | { kind: 'deny'; reason: string } | { kind: 'ask'; reason: string }
+export type Verdict =
+  | { kind: 'allow' }
+  | { kind: 'deny'; reason: string; about: 'secrets' | 'heredoc' }
+  | { kind: 'ask'; reason: string }
 
 /** Whether a shell command runs, is refused, or needs the user's say-so first. */
 export function bashVerdict(command: string): Verdict {
+  const heredoc = heredocReason(command)
+  if (heredoc) return { kind: 'deny', reason: heredoc, about: 'heredoc' }
   const asks: string[] = []
   let rest = command
   for (const [re, why] of ASK_RULES) {
@@ -83,7 +128,7 @@ export function bashVerdict(command: string): Verdict {
     }
   }
   const reason = bashReason(rest)
-  if (reason) return { kind: 'deny', reason }
+  if (reason) return { kind: 'deny', reason, about: 'secrets' }
   return asks.length ? { kind: 'ask', reason: asks.join('; ') } : { kind: 'allow' }
 }
 
