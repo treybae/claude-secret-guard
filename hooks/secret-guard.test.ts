@@ -1,6 +1,6 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, test, type TestBody } from 'claude-code/testing'
 import { MARK, redactText, redactValue } from './redact'
-import { bashReason, isSecretPath } from './rules'
+import { bashReason, bashVerdict, isSecretPath } from './rules'
 
 const BLOCKED_COMMANDS = [
   // shell config and credential files
@@ -50,7 +50,6 @@ const BLOCKED_COMMANDS = [
   'aws configure get aws_secret_access_key',
   'aws --profile prod configure export-credentials',
   'aws sts get-session-token',
-  'aws sts assume-role --role-arn arn:aws:iam::1:role/x --role-session-name s',
   'aws ecr get-login-password --region us-east-1',
   'aws secretsmanager get-secret-value --secret-id app',
   'aws ssm get-parameter --name /app/key --with-decryption',
@@ -106,6 +105,28 @@ test('everyday shell commands are allowed', () => {
   for (const c of ALLOWED_COMMANDS) expect(bashReason(c), c).toBeUndefined()
 })
 
+test('borderline commands ask, and anything else in them still blocks', () => {
+  for (const c of [
+    'kubectl --kubeconfig ~/.kube/config get pods',
+    'kubectl --kubeconfig=$HOME/.kube/prod.yaml -n ns get deploy',
+    'KUBECONFIG=~/.kube/staging helm list -A',
+    'aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 123.dkr.ecr.us-east-1.amazonaws.com',
+    'aws --profile prod ecr get-login-password | helm registry login --username AWS --password-stdin 123.dkr.ecr.us-east-1.amazonaws.com',
+    'aws sts assume-role --role-arn arn:aws:iam::1:role/x --role-session-name s',
+  ]) {
+    expect(bashVerdict(c).kind, c).toBe('ask')
+  }
+  for (const c of [
+    'kubectl --kubeconfig ~/.kube/config get pods; cat ~/.zshrc',
+    'KUBECONFIG=~/.kube/config kubectl get secret app -o yaml',
+    'aws ecr get-login-password --region us-east-1',
+    'aws sts assume-role --role-arn x --role-session-name s && env',
+  ]) {
+    expect(bashVerdict(c).kind, c).toBe('deny')
+  }
+  expect(bashVerdict('kubectl get pods').kind).toBe('allow')
+})
+
 test('file tool paths to secret files are recognised, others are not', () => {
   for (const p of [
     '/Users/me/.zshrc', '/home/me/.bash_profile', '~/.netrc', '/Users/me/.aws/credentials', '/Users/me/.ssh', '/Users/me/.ssh/',
@@ -152,6 +173,60 @@ test('assignments keep their name and lose their value, placeholders are left al
   }
 })
 
+test('Datadog keys, auth headers and AWS credential JSON are redacted', () => {
+  const ddApi = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'
+  const ddApp = ddApi + '0a1b2c3d'
+  expect(redactText(`DD-API-KEY: ${ddApi}`).text).toBe(`DD-API-KEY: ${MARK}`)
+  expect(redactText(`DD-APPLICATION-KEY: ${ddApp}`).text).toBe(`DD-APPLICATION-KEY: ${MARK}`)
+  expect(redactText(`DD_APP_KEY=${ddApp}`).text).toBe(`DD_APP_KEY=${MARK}`)
+  expect(redactText(`DD_API_KEY=${ddApi}`).text).toBe(`DD_API_KEY=${MARK}`)
+  expect(redactText('Authorization: Bearer abcdefghijklmnopqrstuvwx').text).toBe(`Authorization: Bearer ${MARK}`)
+  const sts = '{"Credentials": {"AccessKeyId": "' + 'AS' + 'IA' + 'ABCDEFGHIJKLMNOP", "SecretAccessKey": "wJalrXUtnFEMIK7MDENGbPxRfiCYabcdefgh", "SessionToken": "IQoJb3JpZ2luX2VjEXAMPLEabcdef"}}'
+  const out = redactText(sts).text
+  expect(out).not.toContain('wJalrXUtnFEMI')
+  expect(out).not.toContain('IQoJb3JpZ2lu')
+  expect(out).not.toContain('ABCDEFGHIJKLMNOP')
+})
+
+test('values in Kubernetes Secret manifests are redacted, other documents are not', () => {
+  const yaml = [
+    'apiVersion: v1',
+    'kind: ConfigMap',
+    'data:',
+    '  LOG_LEVEL: debug',
+    '---',
+    'apiVersion: v1',
+    'kind: Secret',
+    'metadata:',
+    '  name: app-secrets',
+    'type: Opaque',
+    'data:',
+    '  password: c3VwZXItc2VjcmV0LXZhbHVl',
+    '  "api-key": YWJj',
+    'stringData:',
+    '  config.yaml: |',
+    '    user: admin',
+    '    pass: hunter2hunter2',
+    '  plain: hello',
+    '---',
+    'kind: Secret',
+    'data:',
+    '  token: ENC[AES256_GCM,data:abc,type:str]',
+    'sops:',
+    '  version: 3.8.1',
+  ].join('\n')
+  const out = redactText(yaml).text
+  expect(out).toContain('LOG_LEVEL: debug')
+  expect(out).toContain(`  password: ${MARK}`)
+  expect(out).toContain(`  "api-key": ${MARK}`)
+  expect(out).toContain('  config.yaml: |')
+  expect(out).not.toContain('hunter2hunter2')
+  expect(out).not.toContain('user: admin')
+  expect(out).toContain(`  plain: ${MARK}`)
+  expect(out).toContain('name: app-secrets')
+  expect(out).toContain('ENC[AES256_GCM')
+})
+
 test('ordinary output is left exactly as it was', () => {
   const plain =
     'NAME   READY   STATUS\napp-1  1/1     Running\ncommit 83539a2 Add plugin\nhttps://github.com/treybae/x\n' +
@@ -173,13 +248,54 @@ test('a blocked Bash call never reaches the tool, an allowed one does', async ($
   })
 
   const blocked = await $.tool.call({ tool: 'Bash', command: 'tail ~/.zshrc' })
-  expect(String((blocked as { deny?: string }).deny ?? blocked.text)).toContain('secret-guard')
+  const message = String((blocked as { deny?: string }).deny ?? blocked.text)
+  expect(message).toContain('secret-guard')
+  expect(message).toContain('separate terminal, not with !')
 
   const printed = await $.tool.call({ tool: 'Bash', command: 'vault kv get secret/app' })
   expect(String((printed as { deny?: string }).deny ?? printed.text)).toContain('vault')
 
   await $.tool.call({ tool: 'Bash', command: 'git status' })
   expect(ran).toEqual(['git status'])
+})
+
+// The tests' stand-in for the engine: answers the approval dialog with `pick`, and records commands that ran.
+function engine(on: Parameters<TestBody>[1], pick: string | Error, ran: string[]) {
+  on('tool.call', (_, e) => {
+    const input = e as unknown as { tool: string; command?: string; questions?: { question: string }[] }
+    if (input.tool === 'AskUserQuestion') {
+      if (pick instanceof Error) throw pick
+      const q = input.questions?.[0]?.question ?? ''
+      return { result: { questions: input.questions, answers: { [q]: pick } } } as never
+    }
+    ran.push(String(input.command))
+    return { result: {} }
+  })
+}
+
+const ASK_COMMAND = 'kubectl --kubeconfig ~/.kube/config get pods'
+
+test('a borderline command runs when the user allows it', async ($, on) => {
+  const ran: string[] = []
+  engine(on, 'Allow once', ran)
+  await $.tool.call({ tool: 'Bash', command: ASK_COMMAND })
+  expect(ran).toEqual([ASK_COMMAND])
+})
+
+test('a borderline command is blocked when the user blocks it or dismisses the dialog', async ($, on) => {
+  const ran: string[] = []
+  engine(on, 'Block', ran)
+  const out = await $.tool.call({ tool: 'Bash', command: ASK_COMMAND })
+  expect(String((out as { deny?: string }).deny ?? out.text)).toContain('did not allow')
+  expect(ran).toEqual([])
+})
+
+test('a borderline command is blocked when no one can answer', async ($, on) => {
+  const ran: string[] = []
+  engine(on, new Error('dismissed'), ran)
+  const out = await $.tool.call({ tool: 'Bash', command: ASK_COMMAND })
+  expect(String((out as { deny?: string }).deny ?? out.text)).toContain('secret-guard')
+  expect(ran).toEqual([])
 })
 
 test('a secret in a tool result is redacted before it comes back', async ($, on) => {

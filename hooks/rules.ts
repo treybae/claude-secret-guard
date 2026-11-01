@@ -33,7 +33,7 @@ const SECRET_COMMANDS: readonly [RegExp, string][] = [
   [/\bop\s+run\b[^|;&]*--no-masking\b/, '`op run --no-masking` prints secrets unmasked'],
   [/\bvault\b[^|;&]*\s(?:read|kv\s+get|token\s+(?:lookup|create)|print\s+token|login)\b/, 'this vault command prints a secret or token'],
   [
-    /\baws\b[^|;&]*\s(?:configure\s+(?:get|export-credentials)|sts\s+(?:get-session-token|assume-role)|ecr\s+get-login-password|secretsmanager\s+get-secret-value|ssm\s+get-parameters?\b[^|;&]*--with-decryption)\b/,
+    /\baws\b[^|;&]*\s(?:configure\s+(?:get|export-credentials)|sts\s+get-session-token|ecr\s+get-login-password|secretsmanager\s+get-secret-value|ssm\s+get-parameters?\b[^|;&]*--with-decryption)\b/,
     'this aws command prints credentials or a secret',
   ],
   [/\bgh\s+auth\s+(?:token\b|status\b[^|;&]*(?:-t\b|--show-token\b))/, 'this gh command prints a GitHub token'],
@@ -55,6 +55,36 @@ export function bashReason(command: string): string | undefined {
   }
   if (ENV_DUMP.test(command)) return 'this command prints environment variables, which may hold secrets'
   return SECRET_COMMANDS.find(([re]) => re.test(command))?.[1]
+}
+
+// Borderline commands: often legitimate, so the user is asked instead of the call being refused.
+// Each pattern is cut out of the command before the hard checks run, so it can't hide anything else.
+const KUBECONFIG_FLAG = new RegExp(`(?:--kubeconfig[=\\s]+|\\bKUBECONFIG=)["']?${HOME}/\\.kube/[^\\s"';|&)]*["']?`, 'g')
+const ECR_LOGIN = /\baws\b[^|;&]*\secr\s+get-login-password\b[^|;&]*\|\s*(?:docker|podman|helm(?:\s+registry)?|crane|oras|skopeo)\b[^|;&]*--password-stdin\b/g
+const ASSUME_ROLE = /\baws\b[^|;&]*\ssts\s+assume-role\b/g
+
+const ASK_RULES: readonly [RegExp, string][] = [
+  [KUBECONFIG_FLAG, 'passes your kubeconfig to a tool; the tool reads it, Claude does not see its contents'],
+  [ECR_LOGIN, 'pipes an ECR login password straight into a registry login; the password is not printed'],
+  [ASSUME_ROLE, 'prints temporary AWS credentials; secret-guard redacts them from the output'],
+]
+
+export type Verdict = { kind: 'allow' } | { kind: 'deny'; reason: string } | { kind: 'ask'; reason: string }
+
+/** Whether a shell command runs, is refused, or needs the user's say-so first. */
+export function bashVerdict(command: string): Verdict {
+  const asks: string[] = []
+  let rest = command
+  for (const [re, why] of ASK_RULES) {
+    re.lastIndex = 0
+    if (re.test(rest)) {
+      asks.push(why)
+      rest = rest.replace(re, ' ')
+    }
+  }
+  const reason = bashReason(rest)
+  if (reason) return { kind: 'deny', reason }
+  return asks.length ? { kind: 'ask', reason: asks.join('; ') } : { kind: 'allow' }
 }
 
 // An absolute or ~ path to a secret file, as a file tool receives it.

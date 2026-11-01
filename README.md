@@ -8,16 +8,30 @@ It does four things, in every permission mode, including auto and inside subagen
 2. **Blocks environment dumps and commands that print secrets.** `env`, `printenv`, `export -p`, `declare -x` and a bare `set`, plus:
     - `op read`, `op item get --reveal`, `op run --no-masking`
     - `vault read`, `vault kv get`, `vault token lookup` / `create`, `vault print token`, `vault login`
-    - `aws configure get` / `export-credentials`, `aws sts get-session-token` / `assume-role`, `aws ecr get-login-password`, `aws secretsmanager get-secret-value`, `aws ssm get-parameter --with-decryption`
+    - `aws configure get` / `export-credentials`, `aws sts get-session-token`, `aws ecr get-login-password` on its own, `aws secretsmanager get-secret-value`, `aws ssm get-parameter --with-decryption`
     - `gh auth token`, `gh auth status --show-token`
     - `kubectl get secret … -o yaml|json|jsonpath|go-template`
     - `security find-generic-password -w`, `gcloud auth print-access-token`, `az account get-access-token`, `git credential fill`
 
     `set -euo pipefail`, `env FOO=bar cmd`, `kubectl get secrets`, `vault status`, `aws sts get-caller-identity` and `op run -- cmd` still work.
 3. **Blocks file tools** (Read, Grep, Glob, Edit, Write) on the credential files in item 1.
-4. **Redacts secrets from tool output.** Whatever a tool returns, anything shaped like a Vault, GitHub, AWS, Slack, 1Password, Anthropic, Stripe or Google key or token, a JWT, a private key block, or a `password`/`secret`/`token`/`api_key` assignment is replaced with `[REDACTED by secret-guard]` before Claude reads it. This catches what slips past the blocks. Placeholders such as `$TOKEN`, `<value>` and `op://...` are left alone.
+4. **Redacts secrets from tool output.** Whatever a tool returns, these are replaced with `[REDACTED by secret-guard]` before Claude reads it:
+    - anything shaped like a Vault, GitHub, AWS, Slack, 1Password, Anthropic, Stripe or Google key or token, a JWT, or a private key block
+    - values of `password`, `secret`, `token`, `api_key`, `app_key` and similar assignments, including Datadog `DD_API_KEY` / `DD_APP_KEY` and AWS `SecretAccessKey` / `SessionToken` JSON
+    - key headers: `DD-API-KEY`, `DD-APPLICATION-KEY`, `X-API-Key`, `Authorization`
+    - the values under `data:` and `stringData:` in Kubernetes Secret YAML, including multi-line `|` values
 
-A blocked call comes back to Claude with the reason, so it asks you instead of retrying. To run a blocked command yourself, type it with `!` at the prompt.
+    This catches what slips past the blocks. Placeholders (`$TOKEN`, `<value>`, `op://...`) and SOPS-encrypted values (`ENC[...]`) are left alone.
+
+**Asks before a few borderline commands.** These are often legitimate, so instead of refusing them, secret-guard asks you to **Allow once** or **Block**:
+
+- passing your kubeconfig to a tool: `kubectl --kubeconfig ~/.kube/config …`, `KUBECONFIG=~/.kube/… helm …`
+- `aws ecr get-login-password` piped straight into `docker`, `podman`, `helm`, `crane`, `oras` or `skopeo` with `--password-stdin`
+- `aws sts assume-role`, whose temporary credentials are redacted from the output
+
+Anything else in the same command still blocks. If the dialog is dismissed, or no one can answer (`claude -p`), the command is blocked.
+
+A blocked call comes back to Claude with the reason, so it asks you instead of retrying. If you need the output yourself, run the command in a separate terminal, **not** with `!` at the Claude prompt: anything run with `!` goes into the conversation, where secret-guard can't redact it.
 
 Pair it with a written rule in your `~/.claude/CLAUDE.md`, so Claude avoids secrets on purpose and passes that on to subagents:
 
@@ -54,8 +68,9 @@ In the desktop app, click + next to the prompt box, then **Plugins**, **Add mark
 
 - **Blocks match text.** A path built at run time (`cat "$(echo ~)/.zsh""rc"`) or a script that opens the file itself gets past the blocks. Redaction catches known token shapes in the output, but not every secret has a recognizable shape. Keep secrets out of plain-text files, in 1Password with `op run`, as the real fix.
 - **Redaction changes what Claude sees.** Test fixtures or docs that contain token-shaped strings are redacted too.
-- **Some legitimate commands are refused**, such as `kubectl --kubeconfig ~/.kube/config` or `vault kv get` when you really need the value. Drop the explicit path, or run it yourself with `!`.
+- **Some legitimate commands are refused**, such as `vault kv get` when you really need the value. Run those in a separate terminal.
+- **Kubernetes Secret redaction reads YAML only.** JSON output (`kubectl get secret -o json`) is blocked as a command instead.
 
 ## Tests
 
-`claude plugin test .` runs the checks in `hooks/secret-guard.test.ts`: 58 commands that must be blocked, 29 that must pass, file paths both ways, each token shape, placeholders and ordinary output left alone, and end-to-end calls for blocking and redaction.
+`claude plugin test .` runs the checks in `hooks/secret-guard.test.ts`: 57 commands that must be blocked, 29 that must pass, the borderline commands that ask, file paths both ways, each token shape, Datadog and AWS credentials, Kubernetes Secret manifests, placeholders and ordinary output left alone, and end-to-end calls for blocking, asking (allowed, blocked, no answer) and redaction.
