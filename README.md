@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".claude-plugin/icon.png" alt="secret-guard: a pixel-art three-headed dog standing guard on a gold key" width="256">
+</p>
+
 # secret-guard
 
 Stops Claude Code from reading credential files, dumping the environment or printing secrets, and redacts secrets from anything a tool returns, so they don't end up in a transcript. It replaces hand-editing `~/.claude/settings.json` with deny rules and a hook script.
