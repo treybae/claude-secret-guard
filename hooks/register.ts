@@ -1,7 +1,7 @@
 import type { Hook, Register } from 'claude-code'
 import { createLog, formatLog, redactedLines, whereOf, type Event } from './log'
 import { redactValue } from './redact'
-import { bashVerdict, isSecretPath } from './rules'
+import { bashVerdict, compileExtras, isSecretPath, type Extras } from './rules'
 
 // Input fields that name a file or folder, across the file tools (Read, Grep, Glob, Edit, Write, ...).
 const PATH_FIELDS = ['file_path', 'path', 'notebook_path'] as const
@@ -22,6 +22,15 @@ type Unstamped = Event extends infer E ? (E extends unknown ? Omit<E, 'at'> : ne
 // Module state: a reload of the plugin starts it empty.
 const log = createLog()
 
+/** One line for /secret-guard on what the team's settings add. */
+function describeExtras(extras: Extras): string {
+  const paths = extras.filePaths.length
+  const commands = extras.commands.length
+  const added = paths || commands ? `${paths} extra path${paths === 1 ? '' : 's'} and ${commands} extra command${commands === 1 ? '' : 's'}` : 'no extra paths or commands'
+  const skipped = extras.problems.length ? `; ${extras.problems.length} entr${extras.problems.length === 1 ? 'y' : 'ies'} skipped as invalid` : ''
+  return `Settings: ${added}${skipped}. Change them under secret-guard in /config.`
+}
+
 // Logging is best-effort: a failure here must never change whether a call is blocked or redacted.
 async function record($: Engine, event: Unstamped): Promise<void> {
   try {
@@ -37,11 +46,14 @@ async function record($: Engine, event: Unstamped): Promise<void> {
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   log.clear()
+  // The team's extra paths and commands. A change in the settings reloads the module with new options.
+  const extras = compileExtras(options)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: COMMAND, description: 'Show what secret-guard redacted or blocked this session, and why', argumentHint: '[clear]' })
+    for (const problem of extras.problems) $.ui.log(`secret-guard settings: ${problem}; skipped.`)
     return next(e)
   })
 
@@ -50,13 +62,13 @@ export const register: Register = on => {
       log.clear()
       return { text: 'Log cleared.' }
     }
-    return { text: formatLog(log.events) }
+    return { text: `${formatLog(log.events)}\n\n${describeExtras(extras)}` }
   })
 
   // Every tool: refuse paths to secret files, then replace secrets in whatever the tool returns.
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
-    const hit = PATH_FIELDS.map(k => input[k]).find(v => typeof v === 'string' && isSecretPath(v))
+    const hit = PATH_FIELDS.map(k => input[k]).find(v => typeof v === 'string' && isSecretPath(v, extras))
     if (hit) {
       await record($, { action: 'blocked', tool: e.tool, where: whereOf(e.tool, input), why: 'the path is a shell config or credential file' })
       return { deny: `${$.plugin.name}: ${String(hit)} is a shell config or credential file. ${ELSEWHERE}` }
@@ -78,7 +90,7 @@ export const register: Register = on => {
   )
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const verdict = bashVerdict(e.command)
+    const verdict = bashVerdict(e.command, extras)
     if (verdict.kind === 'allow') return next(e)
     const where = whereOf('Bash', e as unknown as Record<string, unknown>)
     if (verdict.kind === 'deny') {

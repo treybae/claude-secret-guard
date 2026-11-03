@@ -1,9 +1,25 @@
 {
   "name": "secret-guard",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Your shell holds the keys to production. secret-guard stops Claude Code from reading, printing or leaking them: it blocks risky commands and file reads, and redacts secrets from tool output before Claude sees them.",
   "license": "MIT",
   "author": {
     "name": "treybae"
+  },
+  "userConfig": {
+    "extra_paths": {
+      "type": "string",
+      "multiple": true,
+      "title": "Extra credential paths",
+      "description": "More files or folders to protect, like ~/.config/mytool or /etc/myapp/secrets. Commands and file tools that touch them are blocked.",
+      "default": []
+    },
+    "extra_commands": {
+      "type": "string",
+      "multiple": true,
+      "title": "Extra secret-printing commands",
+      "description": "Regular expressions for more commands that print secrets, like \\bmycli\\s+secrets\\s+show\\b. Matching commands are blocked.",
+      "default": []
+    }
   }
 }

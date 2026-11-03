@@ -70,6 +70,32 @@ Pair it with a written rule in your `~/.claude/CLAUDE.md`, so Claude avoids secr
 - Copy these rules into the brief of every subagent you start.
 ```
 
+## Team settings
+
+Add your own credential paths and secret-printing commands on top of the built-in lists:
+
+| Setting | What it takes | Example |
+|---|---|---|
+| `extra_paths` | Files or folders to protect, starting with `~/` or `/`. Shell commands and file tools that touch them are blocked. | `~/.config/mytool`, `/etc/myapp/secrets` |
+| `extra_commands` | Regular expressions for commands that print secrets. Matching shell commands are blocked. | `\bmycli\s+secrets\s+show\b` |
+
+Set them under **secret-guard** in `/config`, or in a `settings.json` under `pluginConfigs`:
+
+```json
+{
+  "pluginConfigs": {
+    "secret-guard@treybae": {
+      "options": {
+        "extra_paths": ["~/.config/mytool", "/etc/myapp/secrets"],
+        "extra_commands": ["\\bmycli\\s+secrets\\s+show\\b"]
+      }
+    }
+  }
+}
+```
+
+In JSON, each backslash in a regular expression is written twice. A change takes effect right away. An entry that isn't usable, such as a relative path or an invalid regular expression, is skipped with a warning in the transcript at the start of the session. `/secret-guard` shows how many extra paths and commands are active.
+
 ## Install
 
 > [!NOTE]

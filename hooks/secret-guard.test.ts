@@ -1,7 +1,7 @@
 import { expect, test, type TestBody } from 'claude-code/testing'
 import { whereOf } from './log'
 import { MARK, describeKinds, redactText, redactValue } from './redact'
-import { bashReason, bashVerdict, heredocReason, isSecretPath } from './rules'
+import { bashReason, bashVerdict, compileExtras, heredocReason, isSecretPath } from './rules'
 
 const BLOCKED_COMMANDS = [
   // shell config and credential files
@@ -425,7 +425,56 @@ test('/secret-guard shows what was redacted or blocked, where and why, without v
   const cleared = String((await $.command.run({ command: 'secret-guard', args: 'clear' } as never) as { text?: string }).text)
   expect(cleared).toBe('Log cleared.')
   const empty = String((await $.command.run({ command: 'secret-guard', args: '' } as never) as { text?: string }).text)
-  expect(empty).toBe('Nothing redacted or blocked this session.')
+  expect(empty).toBe('Nothing redacted or blocked this session.\n\nSettings: no extra paths or commands. Change them under secret-guard in /config.')
+})
+
+test('team settings compile extra paths and commands, and report bad entries', () => {
+  const extras = compileExtras({
+    extra_paths: ['~/.config/mytool', '/etc/myapp/secrets/', 'relative/path', '  '],
+    extra_commands: ['\\bmycli\\s+secrets\\s+show\\b', '(unclosed', ''],
+  })
+  expect(extras.filePaths.length).toBe(2)
+  expect(extras.commands.length).toBe(1)
+  expect(extras.problems).toEqual([
+    'extra_paths entry "relative/path" must start with ~/ or /',
+    'extra_commands entry "(unclosed" is not a valid regular expression',
+  ])
+  // A single string is read one entry per line or comma.
+  expect(compileExtras({ extra_paths: '~/.a, ~/.b\n~/.c' }).filePaths.length).toBe(3)
+})
+
+test('extra paths block commands and file tools, extra commands block commands', () => {
+  const extras = compileExtras({ extra_paths: ['~/.config/mytool', '/etc/myapp/secrets'], extra_commands: ['\\bmycli\\s+secrets\\s+show\\b'] })
+  for (const c of ['cat ~/.config/mytool/token', 'ls $HOME/.config/mytool', 'grep x /Users/me/.config/mytool/a', 'cat /etc/myapp/secrets/db', 'mycli secrets show prod']) {
+    expect(bashReason(c, extras), c).toBeDefined()
+  }
+  for (const c of ['cat ~/.config/mytool-notes.md', 'cat /etc/myapp/config', 'mycli secrets list', 'ls ~/.config']) {
+    expect(bashReason(c, extras), c).toBeUndefined()
+  }
+  expect(bashReason('mycli secrets show prod', extras)).toContain('`\\bmycli\\s+secrets\\s+show\\b`')
+  for (const p of ['/Users/me/.config/mytool', '/Users/me/.config/mytool/token', '~/.config/mytool/x', '/etc/myapp/secrets/db']) {
+    expect(isSecretPath(p, extras), p).toBe(true)
+  }
+  for (const p of ['/Users/me/.config/mytool2', '/etc/myapp/config', '/Users/me/project/.config/mytool']) {
+    expect(isSecretPath(p, extras), p).toBe(false)
+  }
+  // Without settings, none of these are special.
+  expect(bashReason('mycli secrets show prod')).toBeUndefined()
+  expect(isSecretPath('/etc/myapp/secrets/db')).toBe(false)
+})
+
+test('the plugin reads its settings: an extra command is blocked end to end', { options: { extra_commands: ['\\bmycli\\s+secrets\\s+show\\b'], extra_paths: ['~/.config/mytool'] } }, async ($, on) => {
+  const ran: string[] = []
+  on('tool.call', (_, e) => {
+    ran.push(String((e as unknown as { command?: string; file_path?: string }).command ?? (e as unknown as { file_path?: string }).file_path))
+    return { result: {} }
+  })
+  const out = await $.tool.call({ tool: 'Bash', command: 'mycli secrets show prod' })
+  expect(String((out as { deny?: string }).deny ?? out.text)).toContain('secret-guard settings')
+  const read = await $.tool.call({ tool: 'Read', file_path: '/Users/me/.config/mytool/token' })
+  expect(String((read as { deny?: string }).deny ?? read.text)).toContain('credential file')
+  await $.tool.call({ tool: 'Bash', command: 'mycli secrets list' })
+  expect(ran).toEqual(['mycli secrets list'])
 })
 
 test('a command line that itself holds a secret is redacted in the log', () => {

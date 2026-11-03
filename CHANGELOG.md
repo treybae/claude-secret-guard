@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- Team settings: `extra_paths` adds files or folders to protect, and `extra_commands` adds regular expressions for commands that print secrets. Set them in `/config` or under `pluginConfigs` in `settings.json`.
+- Invalid entries are skipped with a warning, and `/secret-guard` shows how many extras are active.
+
 ## 0.4.2
 
 - New plugin description: "Your shell holds the keys to production. secret-guard stops Claude Code from reading, printing or leaking them."

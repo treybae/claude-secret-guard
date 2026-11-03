@@ -88,12 +88,73 @@ export function heredocReason(command: string): string | undefined {
   return undefined
 }
 
+/** What a team adds through the plugin's settings (`extra_paths`, `extra_commands`), compiled. */
+export type Extras = {
+  /** Match an extra path inside a shell command. */
+  readonly commandPaths: readonly RegExp[]
+  /** Match an extra path as a file tool receives it. */
+  readonly filePaths: readonly RegExp[]
+  /** Extra commands that print secrets, each with the pattern as given, for the reason. */
+  readonly commands: readonly [RegExp, string][]
+  /** Entries that couldn't be used, for a warning. */
+  readonly problems: readonly string[]
+}
+
+export const NO_EXTRAS: Extras = { commandPaths: [], filePaths: [], commands: [], problems: [] }
+
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+function list(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string')
+  // A single string is read as one entry per line or comma.
+  if (typeof value === 'string') return value.split(/[\n,]/)
+  return []
+}
+
+/** Compile the plugin's `extra_paths` and `extra_commands` settings. Bad entries are reported, not fatal. */
+export function compileExtras(options: Readonly<Record<string, unknown>>): Extras {
+  const commandPaths: RegExp[] = []
+  const filePaths: RegExp[] = []
+  const commands: [RegExp, string][] = []
+  const problems: string[] = []
+
+  for (const raw of list(options['extra_paths'])) {
+    const p = raw.trim().replace(/\/+$/, '')
+    if (!p) continue
+    if (p.startsWith('~/') && p.length > 2) {
+      const rel = escape(p.slice(2))
+      commandPaths.push(new RegExp(`${HOME}/${rel}${DIR_END}`))
+      filePaths.push(new RegExp(String.raw`^(?:~|/Users/[^/]+|/home/[^/]+|/root)/` + `${rel}(?:/|$)`))
+    } else if (p.startsWith('/') && p.length > 1) {
+      commandPaths.push(new RegExp(`${escape(p)}${DIR_END}`))
+      filePaths.push(new RegExp(`^${escape(p)}(?:/|$)`))
+    } else {
+      problems.push(`extra_paths entry "${p}" must start with ~/ or /`)
+    }
+  }
+
+  for (const raw of list(options['extra_commands'])) {
+    const pattern = raw.trim()
+    if (!pattern) continue
+    try {
+      commands.push([new RegExp(pattern), pattern])
+    } catch {
+      problems.push(`extra_commands entry "${pattern}" is not a valid regular expression`)
+    }
+  }
+
+  return { commandPaths, filePaths, commands, problems }
+}
+
 /** Why a shell command must not run, or undefined when it may. */
-export function bashReason(command: string): string | undefined {
+export function bashReason(command: string, extras: Extras = NO_EXTRAS): string | undefined {
   if (HOME_PATH.test(command) || BARE_NAME.test(command)) {
     return 'this command references a shell config or credential file (~/.zshrc, ~/.aws, ~/.ssh, ~/.vault-token, ...)'
   }
+  if (extras.commandPaths.some(re => re.test(command))) return 'this command references a path your team protects in secret-guard settings'
   if (ENV_DUMP.test(command)) return 'this command prints environment variables, which may hold secrets'
+  const extra = extras.commands.find(([re]) => re.test(command))
+  if (extra) return `this command matches \`${extra[1]}\`, which your team marked as printing secrets in secret-guard settings`
   return SECRET_COMMANDS.find(([re]) => re.test(command))?.[1]
 }
 
@@ -115,7 +176,7 @@ export type Verdict =
   | { kind: 'ask'; reason: string }
 
 /** Whether a shell command runs, is refused, or needs the user's say-so first. */
-export function bashVerdict(command: string): Verdict {
+export function bashVerdict(command: string, extras: Extras = NO_EXTRAS): Verdict {
   const heredoc = heredocReason(command)
   if (heredoc) return { kind: 'deny', reason: heredoc, about: 'heredoc' }
   const asks: string[] = []
@@ -127,7 +188,7 @@ export function bashVerdict(command: string): Verdict {
       rest = rest.replace(re, ' ')
     }
   }
-  const reason = bashReason(rest)
+  const reason = bashReason(rest, extras)
   if (reason) return { kind: 'deny', reason, about: 'secrets' }
   return asks.length ? { kind: 'ask', reason: asks.join('; ') } : { kind: 'allow' }
 }
@@ -138,6 +199,7 @@ const SECRET_FILE = new RegExp(
 )
 
 /** True when a file tool's path points at a shell config or credential file. */
-export function isSecretPath(path: string): boolean {
-  return SECRET_FILE.test(path.replace(/\/+$/, '').replace(/\/\.\//g, '/'))
+export function isSecretPath(path: string, extras: Extras = NO_EXTRAS): boolean {
+  const p = path.replace(/\/+$/, '').replace(/\/\.\//g, '/')
+  return SECRET_FILE.test(p) || extras.filePaths.some(re => re.test(p))
 }
