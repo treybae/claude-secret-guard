@@ -1,7 +1,7 @@
 import { expect, test, type TestBody } from 'claude-code/testing'
 import { whereOf } from './log'
 import { MARK, describeKinds, redactText, redactValue } from './redact'
-import { bashReason, bashVerdict, compileExtras, heredocReason, isSecretPath } from './rules'
+import { bashReason, bashVerdict, compileExtras, heredocReason, isSecretPath, selfEditReason } from './rules'
 
 const BLOCKED_COMMANDS = [
   // shell config and credential files
@@ -425,7 +425,9 @@ test('/secret-guard shows what was redacted or blocked, where and why, without v
   const cleared = String((await $.command.run({ command: 'secret-guard', args: 'clear' } as never) as { text?: string }).text)
   expect(cleared).toBe('Log cleared.')
   const empty = String((await $.command.run({ command: 'secret-guard', args: '' } as never) as { text?: string }).text)
-  expect(empty).toBe('Nothing redacted or blocked this session.\n\nSettings: no extra paths or commands. Change them under secret-guard in /config.')
+  expect(empty).toBe(
+    'Nothing redacted or blocked this session.\n\nAll rules are on.\nSettings: no extra paths, extra commands or allowed commands. Change them under secret-guard in /config.',
+  )
 })
 
 test('team settings compile extra paths and commands, and report bad entries', () => {
@@ -475,6 +477,105 @@ test('the plugin reads its settings: an extra command is blocked end to end', { 
   expect(String((read as { deny?: string }).deny ?? read.text)).toContain('credential file')
   await $.tool.call({ tool: 'Bash', command: 'mycli secrets list' })
   expect(ran).toEqual(['mycli secrets list'])
+})
+
+test('each rule can be turned off on its own, and the rest stay on', () => {
+  const on = compileExtras({})
+  expect(Object.values(on.rules).every(Boolean)).toBe(true)
+
+  const noFiles = compileExtras({ block_credential_files: false })
+  expect(bashReason('tail ~/.zshrc', noFiles)).toBeUndefined()
+  expect(isSecretPath('/Users/me/.vault-token', noFiles)).toBe(false)
+  expect(bashReason('printenv', noFiles)).toBeDefined()
+
+  const noEnv = compileExtras({ block_env_dumps: 'false' })
+  expect(bashReason('printenv', noEnv)).toBeUndefined()
+  expect(bashReason('vault kv get secret/app', noEnv)).toBeDefined()
+
+  const noCommands = compileExtras({ block_secret_commands: false })
+  expect(bashReason('vault kv get secret/app', noCommands)).toBeUndefined()
+  expect(bashReason('tail ~/.zshrc', noCommands)).toBeDefined()
+
+  const heredoc = 'cat > notes.txt <<EOF\nhello\nEOF'
+  expect(bashVerdict(heredoc).kind).toBe('deny')
+  expect(bashVerdict(heredoc, compileExtras({ block_heredocs: false })).kind).toBe('allow')
+
+  // With asking off, a borderline command runs, but anything else in it still blocks.
+  const noAsk = compileExtras({ ask_borderline: false })
+  expect(bashVerdict('kubectl --kubeconfig ~/.kube/config get pods', noAsk).kind).toBe('allow')
+  expect(bashVerdict('kubectl --kubeconfig ~/.kube/config get pods && cat ~/.aws/credentials', noAsk).kind).toBe('deny')
+
+  // Team additions stay on when the built-in rules are off.
+  const team = compileExtras({ block_credential_files: false, block_secret_commands: false, extra_paths: ['~/.config/mytool'], extra_commands: ['\\bmycli\\s+secrets\\b'] })
+  expect(bashReason('cat ~/.config/mytool/token', team)).toBeDefined()
+  expect(bashReason('mycli secrets show', team)).toBeDefined()
+})
+
+test('allowed commands skip the blocks only when they match the whole command', () => {
+  const extras = compileExtras({ allow_commands: ['vault kv get secret/ci/public-config', 'aws configure get region( --profile \\w+)?', '(bad'] })
+  expect(extras.allow.length).toBe(2)
+  expect(extras.problems).toEqual(['allow_commands entry "(bad" is not a valid regular expression'])
+  expect(bashVerdict('vault kv get secret/ci/public-config', extras).kind).toBe('allow')
+  expect(bashVerdict('  aws configure get region --profile dev ', extras).kind).toBe('allow')
+  // Anything added around an allowed command is checked as usual.
+  expect(bashVerdict('vault kv get secret/ci/public-config; cat ~/.zshrc', extras).kind).toBe('deny')
+  expect(bashVerdict('aws configure get aws_secret_access_key', extras).kind).toBe('deny')
+})
+
+test('Claude cannot turn off or edit secret-guard through settings, plugin commands or its files', () => {
+  const blocked: [string, Record<string, unknown>][] = [
+    ['Edit', { file_path: '/Users/me/.claude/settings.json', old_string: '"secret-guard@treybae": true', new_string: '"secret-guard@treybae": false' }],
+    ['Edit', { file_path: '/Users/me/work/.claude/settings.local.json', old_string: '{', new_string: '{\n  "disableAllHooks": true,' }],
+    ['Edit', { file_path: '/Users/me/.claude/settings.json', old_string: '"redact_output": true', new_string: '"redact_output": false' }],
+    ['Write', { file_path: '/Users/me/work/.claude/settings.json', content: '{ "pluginConfigs": {} }' }],
+    ['MultiEdit', { file_path: '/Users/me/.claude/settings.json', edits: [{ old_string: 'a', new_string: '"allow_commands": [".*"]' }] }],
+    ['Write', { file_path: '/Library/Application Support/ClaudeCode/managed-settings.json', content: '{ "enabledPlugins": {} }' }],
+    ['Edit', { file_path: '/Users/me/.claude/plugins/cache/treybae/secret-guard/0.5.0/hooks/rules.ts', old_string: 'a', new_string: 'b' }],
+    ['Bash', { command: 'claude plugin disable secret-guard@treybae' }],
+    ['Bash', { command: 'claude plugin uninstall secret-guard' }],
+    ['Bash', { command: `jq '.enabledPlugins["secret-guard@treybae"] = false' ~/.claude/settings.json > /tmp/s && mv /tmp/s ~/.claude/settings.json` }],
+    ['Bash', { command: `sed -i '' 's/"block_heredocs": true/"block_heredocs": false/' .claude/settings.json` }],
+    ['Bash', { command: 'rm -rf ~/.claude/plugins/cache/treybae/secret-guard' }],
+  ]
+  for (const [tool, input] of blocked) expect(selfEditReason(tool, input), `${tool} ${JSON.stringify(input)}`).toBeDefined()
+
+  const allowed: [string, Record<string, unknown>][] = [
+    ['Edit', { file_path: '/Users/me/.claude/settings.json', old_string: '"theme": "dark"', new_string: '"theme": "light"' }],
+    ['Read', { file_path: '/Users/me/.claude/settings.json' }],
+    ['Edit', { file_path: '/Users/me/project/README.md', old_string: 'a', new_string: 'secret-guard pluginConfigs' }],
+    ['Edit', { file_path: '/Users/me/.claude/plugins-dev/secret-guard/hooks/rules.ts', old_string: 'a', new_string: 'b' }],
+    ['Bash', { command: 'claude plugin install secret-guard --marketplace treybae/claude-secret-guard' }],
+    ['Bash', { command: 'jq .theme ~/.claude/settings.json' }],
+    ['Bash', { command: 'git commit -m "secret-guard: tidy README"' }],
+  ]
+  for (const [tool, input] of allowed) expect(selfEditReason(tool, input), `${tool} ${JSON.stringify(input)}`).toBeUndefined()
+})
+
+test('self-protection holds end to end, even with every rule off and everything allowed', {
+  options: {
+    block_credential_files: false, block_env_dumps: false, block_secret_commands: false, block_heredocs: false,
+    ask_borderline: false, redact_output: false, allow_commands: ['.*'],
+  },
+}, async ($, on) => {
+  const ran: string[] = []
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', (_, e) => {
+    ran.push(String((e as unknown as { command?: string }).command))
+    return { result: { stdout: `VAULT_TOKEN=${FAKE.vault}`, stderr: '' } }
+  })
+  const off = await $.tool.call({ tool: 'Bash', command: 'claude plugin disable secret-guard' })
+  expect(String((off as { deny?: string }).deny ?? off.text)).toContain("Claude can't change secret-guard")
+  const out = await $.tool.call({ tool: 'Bash', command: 'printenv' })
+  // With redaction off, the output comes back as the tool gave it.
+  expect(String((out as { result?: { stdout?: string } }).result?.stdout)).toContain(FAKE.vault)
+  expect(ran).toEqual(['printenv'])
+})
+
+test('/secret-guard names the rules that are off', { options: { redact_output: false, block_heredocs: false, allow_commands: ['make deploy'] } }, async ($, on) => {
+  on('command.run', () => ({ text: 'engine' }) as never)
+  const report = String((await $.command.run({ command: 'secret-guard', args: '' } as never) as { text?: string }).text)
+  expect(report).toContain('Rules turned off: heredoc blocks (block_heredocs), output redaction (redact_output).')
+  expect(report).toContain('0 extra paths, 0 extra commands and 1 allowed command')
 })
 
 test('a command line that itself holds a secret is redacted in the log', () => {

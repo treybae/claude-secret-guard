@@ -72,12 +72,26 @@ Pair it with a written rule in your `~/.claude/CLAUDE.md`, so Claude avoids secr
 
 ## Team settings
 
-Add your own credential paths and secret-printing commands on top of the built-in lists:
+Every rule is on by default. Each one can be turned off on its own:
+
+| Switch | When off |
+|---|---|
+| `block_credential_files` | Shell commands and file tools may touch the built-in credential files. |
+| `block_env_dumps` | `env`, `printenv`, `export -p`, `declare -x` and a bare `set` run. |
+| `block_secret_commands` | The built-in secret-printing commands (`op read`, `vault kv get`, ...) run. |
+| `block_heredocs` | Heredocs that write files or end early run. |
+| `ask_borderline` | Borderline commands run without asking. Anything else in the same command still blocks. |
+| `redact_output` | Tool output reaches Claude as the tool returned it. |
+
+Add your own lists on top of the built-in ones:
 
 | Setting | What it takes | Example |
 |---|---|---|
 | `extra_paths` | Files or folders to protect, starting with `~/` or `/`. Shell commands and file tools that touch them are blocked. | `~/.config/mytool`, `/etc/myapp/secrets` |
 | `extra_commands` | Regular expressions for commands that print secrets. Matching shell commands are blocked. | `\bmycli\s+secrets\s+show\b` |
+| `allow_commands` | Regular expressions for shell commands that are never blocked. Each must match the whole command, so anything added before or after it is checked as usual. Their output is still redacted. | `aws configure get region` |
+
+`extra_paths` and `extra_commands` stay on when the built-in switches are off; to stop one, remove it.
 
 Set them under **secret-guard** in `/config`, or in a `settings.json` under `pluginConfigs`:
 
@@ -86,15 +100,25 @@ Set them under **secret-guard** in `/config`, or in a `settings.json` under `plu
   "pluginConfigs": {
     "secret-guard@treybae": {
       "options": {
+        "ask_borderline": false,
         "extra_paths": ["~/.config/mytool", "/etc/myapp/secrets"],
-        "extra_commands": ["\\bmycli\\s+secrets\\s+show\\b"]
+        "extra_commands": ["\\bmycli\\s+secrets\\s+show\\b"],
+        "allow_commands": ["aws configure get region( --profile [\\w-]+)?"]
       }
     }
   }
 }
 ```
 
-In JSON, each backslash in a regular expression is written twice. A change takes effect right away. An entry that isn't usable, such as a relative path or an invalid regular expression, is skipped with a warning in the transcript at the start of the session. `/secret-guard` shows how many extra paths and commands are active.
+In JSON, each backslash in a regular expression is written twice. A change takes effect right away. An entry that isn't usable, such as a relative path or an invalid regular expression, is skipped with a warning in the transcript at the start of the session. `/secret-guard` lists the rules that are off and how many extra paths, extra commands and allowed commands are active.
+
+**Claude can't turn secret-guard off.** Whatever the settings say, secret-guard blocks Claude from:
+
+- editing a Claude Code settings file (`settings.json`, `settings.local.json`, `managed-settings.json`) in a way that touches secret-guard, its options, `enabledPlugins`, `pluginConfigs` or `disableAllHooks`
+- running `claude plugin disable`, `uninstall` or `remove` on secret-guard
+- changing secret-guard's installed files under `~/.claude/plugins/`
+
+Only you can change secret-guard's settings, in `/config` or `/plugin`, or by editing the files yourself. Claude can still make other changes to your settings.
 
 ## Install
 
@@ -124,4 +148,4 @@ In the desktop app, click + next to the prompt box, then **Plugins**, **Add mark
 
 ## Tests
 
-`claude plugin test .` runs the checks in `hooks/secret-guard.test.ts`: 57 commands that must be blocked, 29 that must pass, the borderline commands that ask, file paths both ways, each token shape, Datadog and AWS credentials, Kubernetes Secret manifests, placeholders and ordinary output left alone, and end-to-end calls for blocking, asking (allowed, blocked, no answer) and redaction.
+`claude plugin test .` runs the checks in `hooks/secret-guard.test.ts`: 57 commands that must be blocked, 29 that must pass, the borderline commands that ask, file paths both ways, each token shape, Datadog and AWS credentials, Kubernetes Secret manifests, placeholders and ordinary output left alone, team settings, each rule switch, the allowlist, self-protection, and end-to-end calls for blocking, asking (allowed, blocked, no answer) and redaction.
