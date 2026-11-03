@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Team settings: `extra_paths` adds files or folders to protect, and `extra_commands` adds regular expressions for commands that print secrets. Set them in `/config` or under `pluginConfigs` in `settings.json`.
+- Switches to turn off each rule on its own, all on by default: `block_credential_files`, `block_env_dumps`, `block_secret_commands`, `block_heredocs`, `ask_borderline` and `redact_output`.
+- `allow_commands`: regular expressions for shell commands that are never blocked. Each must match the whole command; their output is still redacted.
+- Invalid entries are skipped with a warning. `/secret-guard` lists the rules that are off and how many extras and allowed commands are active.
+- Self-protection, always on: Claude can't edit settings files in ways that touch secret-guard, `enabledPlugins`, `pluginConfigs` or `disableAllHooks`, run `claude plugin disable` or `uninstall` on it, or change its installed files.
+
 ## 0.4.2
 
 - New plugin description: "Your shell holds the keys to production. secret-guard stops Claude Code from reading, printing or leaking them."

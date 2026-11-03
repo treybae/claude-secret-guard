@@ -1,9 +1,68 @@
 {
   "name": "secret-guard",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Your shell holds the keys to production. secret-guard stops Claude Code from reading, printing or leaking them: it blocks risky commands and file reads, and redacts secrets from tool output before Claude sees them.",
   "license": "MIT",
   "author": {
     "name": "treybae"
+  },
+  "userConfig": {
+    "block_credential_files": {
+      "type": "boolean",
+      "title": "Block credential files",
+      "description": "Block shell commands and file tools that touch shell config and credential files (~/.zshrc, ~/.aws, ~/.ssh, ~/.kube, ~/.vault-token and more).",
+      "default": true
+    },
+    "block_env_dumps": {
+      "type": "boolean",
+      "title": "Block environment dumps",
+      "description": "Block env, printenv, export -p, declare -x and a bare set.",
+      "default": true
+    },
+    "block_secret_commands": {
+      "type": "boolean",
+      "title": "Block secret-printing commands",
+      "description": "Block commands like op read, vault kv get, gh auth token and kubectl get secret -o yaml.",
+      "default": true
+    },
+    "block_heredocs": {
+      "type": "boolean",
+      "title": "Block unsafe heredocs",
+      "description": "Block heredocs that write files, or that would end early and run their text as commands.",
+      "default": true
+    },
+    "ask_borderline": {
+      "type": "boolean",
+      "title": "Ask before borderline commands",
+      "description": "Ask before kubeconfig flags, ECR login pipes and aws sts assume-role. When off, they run without asking.",
+      "default": true
+    },
+    "redact_output": {
+      "type": "boolean",
+      "title": "Redact secrets from tool output",
+      "description": "Replace anything shaped like a key or token in tool output before Claude reads it.",
+      "default": true
+    },
+    "allow_commands": {
+      "type": "string",
+      "multiple": true,
+      "title": "Allowed commands",
+      "description": "Regular expressions for shell commands that are never blocked. Each must match the whole command. Their output is still redacted.",
+      "default": []
+    },
+    "extra_paths": {
+      "type": "string",
+      "multiple": true,
+      "title": "Extra credential paths",
+      "description": "More files or folders to protect, like ~/.config/mytool or /etc/myapp/secrets. Commands and file tools that touch them are blocked.",
+      "default": []
+    },
+    "extra_commands": {
+      "type": "string",
+      "multiple": true,
+      "title": "Extra secret-printing commands",
+      "description": "Regular expressions for more commands that print secrets, like \\bmycli\\s+secrets\\s+show\\b. Matching commands are blocked.",
+      "default": []
+    }
   }
 }
